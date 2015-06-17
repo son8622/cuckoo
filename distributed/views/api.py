@@ -4,6 +4,7 @@
 
 import os
 import tempfile
+import time
 
 from flask import Blueprint, g, jsonify, request, send_file
 
@@ -264,4 +265,24 @@ def report_get(task_id, report_format="json"):
 
 @blueprint.route("/status")
 def status_get():
-    return jsonify(success=True, nodes=g.statuses, tasks=dist_status)
+    paths = dict(
+        reports=g.reports_directory,
+        samples=g.samples_directory,
+    )
+
+    diskspace = {}
+    for key, path in paths.items():
+        if hasattr(os, "statvfs"):
+            stats = os.statvfs(path)
+            diskspace[key] = dict(
+                free=stats.f_bavail * stats.f_frsize,
+                total=stats.f_blocks * stats.f_frsize,
+                used=(stats.f_blocks - stats.f_bavail) * stats.f_frsize,
+            )
+
+    status = {
+        "diskspace": diskspace,
+    }
+
+    return jsonify(success=True, nodes=g.statuses, tasks=dist_status,
+                   status=status, timestamp=int(time.time()))
