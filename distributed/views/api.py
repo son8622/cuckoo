@@ -2,13 +2,12 @@
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
-import datetime
 import os
 import tempfile
 
 from flask import Blueprint, g, jsonify, request, send_file
 
-from distributed.db import db, Node, Task, Machine
+from distributed.db import db, Node, Task, Machine, dist_status
 from distributed.api import list_machines
 
 blueprint = Blueprint("api", __name__)
@@ -265,26 +264,4 @@ def report_get(task_id, report_format="json"):
 
 @blueprint.route("/status")
 def status_get():
-    tasks = Task.query
-
-    def fetch_stats(tasks):
-        return dict(
-            pending=tasks.filter_by(status=Task.PENDING).count(),
-            processing=tasks.filter_by(status=Task.PROCESSING).count(),
-            finished=tasks.filter_by(status=Task.FINISHED).count(),
-            deleted=tasks.filter_by(status=Task.DELETED).count(),
-        )
-
-    yesterday = datetime.datetime.now() - datetime.timedelta(1)
-    since_yesterday = tasks.filter(Task.started > yesterday)
-
-    tasks = {
-        "all": fetch_stats(tasks),
-        "prio1": fetch_stats(tasks.filter_by(priority=1)),
-        "prio2": fetch_stats(tasks.filter_by(priority=2)),
-        "today": fetch_stats(since_yesterday),
-        "today1": fetch_stats(since_yesterday.filter_by(priority=1)),
-        "today2": fetch_stats(since_yesterday.filter_by(priority=2)),
-    }
-
-    return jsonify(success=True, nodes=g.statuses, tasks=tasks)
+    return jsonify(success=True, nodes=g.statuses, tasks=dist_status)
