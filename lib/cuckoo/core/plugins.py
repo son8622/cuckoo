@@ -443,7 +443,7 @@ class RunSignatures(object):
                     call_count = 0
 
                     for sig in evented_list:
-                        sig.on_thread(process["process_identifier"], thread["tid"])
+                        sig.on_thread(process["process_identifier"], thread["thread_identifier"])
 
                     for call in thread.get("calls", []):
                         call_count += 1
@@ -465,7 +465,7 @@ class RunSignatures(object):
 
                             result = None
                             try:
-                                result = sig.goto_on_call(call, process["process_identifier"], thread["tid"], call_count)
+                                result = sig.goto_on_call(call, process["process_identifier"], thread["thread_identifier"], call_count)
                             except:
                                 log.exception("Failed to run signature \"%s\":", sig.name)
                                 result = False
