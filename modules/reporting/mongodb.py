@@ -54,19 +54,20 @@ class MongoDB(Report):
 
         if existing:
             return existing["_id"]
-        else:
-            new = self.fs.new_file(filename=filename,
-                                   contentType=file_obj.get_content_type(),
-                                   sha256=file_obj.get_sha256())
-            for chunk in file_obj.get_chunks():
-                new.write(chunk)
-            try:
-                new.close()
-            except FileExists:
-                to_find = {"sha256": file_obj.get_sha256()}
-                return self.db.fs.files.find_one(to_find)["_id"]
-            else:
-                return new._id
+
+        new = self.fs.new_file(filename=filename,
+                               contentType=file_obj.get_content_type(),
+                               sha256=file_obj.get_sha256())
+
+        for chunk in file_obj.get_chunks():
+            new.write(chunk)
+
+        try:
+            new.close()
+            return new._id
+        except FileExists:
+            to_find = {"sha256": file_obj.get_sha256()}
+            return self.db.fs.files.find_one(to_find)["_id"]
 
     def run(self, results):
         """Writes report.
@@ -104,7 +105,7 @@ class MongoDB(Report):
         # the original dictionary and possibly compromise the following
         # reporting modules.
         report = dict(results)
-        if not "network" in report:
+        if "network" not in report:
             report["network"] = {}
 
         # Store the sample in GridFS.
@@ -158,10 +159,10 @@ class MongoDB(Report):
         shots_path = os.path.join(self.analysis_path, "shots")
         if os.path.exists(shots_path):
             # Walk through the files and select the JPGs.
-            shots = [shot for shot in os.listdir(shots_path)
-                     if shot.endswith(".jpg")]
+            for shot_file in sorted(os.listdir(shots_path)):
+                if not shot_file.endswith(".jpg"):
+                    continue
 
-            for shot_file in sorted(shots):
                 shot_path = os.path.join(self.analysis_path,
                                          "shots", shot_file)
                 shot = File(shot_path)
