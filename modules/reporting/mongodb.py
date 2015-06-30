@@ -3,6 +3,7 @@
 # See the file 'docs/LICENSE' for copying permission.
 
 import os
+import copy
 
 from lib.cuckoo.common.abstracts import Report
 from lib.cuckoo.common.exceptions import CuckooDependencyError
@@ -104,7 +105,7 @@ class MongoDB(Report):
         # Create a copy of the dictionary. This is done in order to not modify
         # the original dictionary and possibly compromise the following
         # reporting modules.
-        report = dict(results)
+        report = copy.deepcopy(results)
         if "network" not in report:
             report["network"] = {}
 
