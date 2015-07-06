@@ -62,15 +62,15 @@ class ResultServer(SocketServer.ThreadingTCPServer, object):
                 # In Mac OS X or FreeBSD:
                 # EADDRINUSE 48 (Address already in use)
                 if e.errno == 98 or e.errno == 48:
-                    log.warning("Cannot bind ResultServer on port {0}, "
-                                "trying another port.".format(self.port))
+                    log.warning("Cannot bind ResultServer on port %s, "
+                                "trying another port.", self.port)
                     self.port += 1
                 else:
                     raise CuckooCriticalError("Unable to bind ResultServer on "
                                               "{0}:{1}: {2}".format(
                                                   ip, self.port, str(e)))
             else:
-                log.debug("ResultServer running on {0}:{1}.".format(ip, self.port))
+                log.debug("ResultServer running on %s:%s.", ip, self.port)
                 self.servethread = Thread(target=self.serve_forever)
                 self.servethread.setDaemon(True)
                 self.servethread.start()
@@ -85,8 +85,8 @@ class ResultServer(SocketServer.ThreadingTCPServer, object):
         """Delete ResultServer state and wait for pending RequestHandlers."""
         x = self.analysistasks.pop(machine.ip, None)
         if not x:
-            log.warning("ResultServer did not have {0} in its task "
-                        "info.".format(machine.ip))
+            log.warning("ResultServer did not have %s in its task info.",
+                        machine.ip)
         handlers = self.analysishandlers.pop(task.id, None)
         for h in handlers:
             h.end_request.set()
@@ -104,8 +104,7 @@ class ResultServer(SocketServer.ThreadingTCPServer, object):
         """Return state for this IP's task."""
         x = self.analysistasks.get(ip)
         if not x:
-            log.critical("ResultServer unable to map ip to "
-                         "context: {0}.".format(ip))
+            log.critical("ResultServer unable to map ip to context: %s.", ip)
             return None, None
 
         return x
@@ -203,7 +202,6 @@ class ResultHandler(SocketServer.BaseRequestHandler):
     def handle(self):
         ip, port = self.client_address
         self.connect_time = datetime.datetime.now()
-        log.debug("New connection from: {0}:{1}".format(ip, port))
 
         self.storagepath = self.server.build_storage_path(ip)
         if not self.storagepath:
@@ -226,8 +224,6 @@ class ResultHandler(SocketServer.BaseRequestHandler):
         except:
             log.exception("FIXME - exception in resultserver connection %s",
                           str(self.client_address))
-
-        log.debug("Connection closed: {0}:{1}".format(ip, port))
 
     def log_process(self, ctx, timestring, pid, ppid, modulepath, procname):
         if self.pid is not None:
@@ -253,9 +249,6 @@ class ResultHandler(SocketServer.BaseRequestHandler):
 
         self.pid, self.ppid, self.procname = pid, ppid, procname
 
-    def log_thread(self, context, pid):
-        log.debug("New thread (tid={0}, pid={1})".format(context[3], pid))
-
     def log_anomaly(self, subcategory, tid, funcname, msg):
         log.debug("Anomaly (tid=%s, category=%s, funcname=%s): %s",
                   tid, subcategory, funcname, msg)
@@ -266,8 +259,6 @@ class ResultHandler(SocketServer.BaseRequestHandler):
                                          "before process.")
 
         apiindex, status, returnval, tid, timediff, _, _ = context
-
-        # log.debug("log_call> tid:{0} apiname:{1}".format(tid, apiname))
 
         if self.logfd:
             current_time = \
@@ -310,7 +301,7 @@ class FileUpload(object):
         # shots/0001.jpg or files/9498687557/libcurl-4.dll.bin
 
         buf = self.handler.read_newline().strip().replace("\\", "/")
-        log.debug("File upload request for {0}".format(buf))
+        log.debug("File upload request for %s", buf)
 
         dir_part, filename = os.path.split(buf)
 
@@ -324,7 +315,7 @@ class FileUpload(object):
         try:
             create_folder(self.storagepath, dir_part)
         except CuckooOperationalError:
-            log.error("Unable to create folder %s" % dir_part)
+            log.error("Unable to create folder %s", dir_part)
             return False
 
         file_path = os.path.join(self.storagepath, buf.strip())
@@ -351,7 +342,7 @@ class FileUpload(object):
             except:
                 break
 
-        log.debug("Uploaded file length: {0}".format(self.fd.tell()))
+        log.debug("Uploaded file length: %s", self.fd.tell())
 
     def close(self):
         if self.fd:
@@ -372,6 +363,7 @@ class LogHandler(object):
         buf = self.handler.read_newline()
         if not buf:
             return False
+
         self.fd.write(buf)
         self.fd.flush()
         return True
