@@ -1,10 +1,13 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2010-2013 Claudio Guarnieri.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
-import logging
-import struct
 import datetime
+import hashlib
+import logging
+import os.path
+import struct
 
 try:
     import bson
@@ -19,73 +22,132 @@ else:
     # "loads" function (just like pickle etc.)
     elif hasattr(bson, "loads"):
         bson_decode = lambda d: bson.loads(d)
-    else:
-        HAVE_BSON = False
 
+from lib.cuckoo.common.abstracts import ProtocolHandler
 from lib.cuckoo.common.utils import get_filename_from_path
 from lib.cuckoo.common.exceptions import CuckooResultError
 
 log = logging.getLogger(__name__)
 
-###############################################################################
-# Generic BSON based protocol - by rep
-# Allows all kinds of languages / sources to generate input for Cuckoo,
-# thus we can reuse report generation / signatures for other API trace sources.
-###############################################################################
-
-TYPECONVERTERS = {
-    "p": lambda v: "0x%08x" % default_converter(v),
-}
-
 # 20 Mb max message length.
 MAX_MESSAGE_LENGTH = 20 * 1024 * 1024
 
-def default_converter(v):
-    # Fix signed ints (bson is kind of limited there).
-    if type(v) in (int, long) and v < 0:
-        return v + 0x100000000
+def pointer_converter_32bit(v):
+    return "0x%08x" % (v % 2**32)
+
+def pointer_converter_64bit(v):
+    return "0x%016x" % (v % 2**64)
+
+def default_converter_32bit(v):
+    if isinstance(v, (int, long)) and v < 0:
+        return v % 2**32
+
+    # Try to avoid various unicode issues through usage of latin-1 encoding.
     if isinstance(v, str):
         return v.decode("latin-1")
     return v
 
-def check_names_for_typeinfo(arginfo):
-    argnames = [i[0] if type(i) in (list, tuple) else i for i in arginfo]
+def default_converter_64bit(v):
+    # Don't convert signed 64-bit integers into unsigned 64-bit integers as
+    # MongoDB doesn't support 64-bit unsigned integers (and ElasticSearch
+    # probably doesn't either).
+    # if isinstance(v, (int, long)) and v < 0:
+        # return v % 2**64
 
-    converters = []
-    for i in arginfo:
-        if type(i) in (list, tuple):
-            r = TYPECONVERTERS.get(i[1], None)
-            if not r:
-                log.debug("Analyzer sent unknown format "
-                          "specifier '{0}'".format(i[1]))
-                r = default_converter
-            converters.append(r)
-        else:
-            converters.append(default_converter)
+    # Try to avoid various unicode issues through usage of latin-1 encoding.
+    if isinstance(v, str):
+        return v.decode("latin-1")
+    return v
 
-    return argnames, converters
+class BsonParser(ProtocolHandler):
+    """Receives and interprets .bson logs from the monitor.
 
-class BsonParser(object):
-    """Handle .bson logs from monitor. Basically we would like to directly pass through
-    the parsed data structures, but the .bson logs need a bit special handling to be more space efficient.
+    The monitor provides us with "info" messages that explain how the function
+    arguments will come through later on. This class remembers these info
+    mappings and then transforms the api call messages accordingly.
 
-    Basically we get "info" messages that explain how the function arguments will come through later on.
-    This class remembers these info mappings and then transforms the api call messages accordingly.
-
-    Other message types typically get passed through after renaming the keys slightly.
+    Other message types typically get passed through after renaming the
+    keys slightly.
     """
+    converters_32bit = {
+        None: default_converter_32bit,
+        "p": pointer_converter_32bit,
+        "x": pointer_converter_32bit,
+    }
 
-    def __init__(self, fd):
-        self.fd = fd
+    converters_64bit = {
+        None: default_converter_64bit,
+        "p": pointer_converter_64bit,
+        "x": pointer_converter_32bit,
+    }
+
+    def init(self):
+        self.fd = self.handler
+
         self.infomap = {}
-        self.flags = {}
+        self.flags_value = {}
+        self.flags_bitmask = {}
         self.pid = None
+        self.is_64bit = False
+        self.buffer_sha1 = None
 
         if not HAVE_BSON:
-            log.critical("Starting BsonParser, but bson is not available! (install with `pip install bson`)")
+            log.critical(
+                "Starting BsonParser, but bson is not available! "
+                "(install with `pip install bson`)"
+            )
 
-    def close(self):
-        pass
+    def resolve_flags(self, apiname, argdict, flags):
+        # Resolve 1:1 values.
+        for argument, values in self.flags_value[apiname].items():
+            if isinstance(argdict[argument], str):
+                value = int(argdict[argument], 16)
+            else:
+                value = argdict[argument]
+
+            if value in values:
+                flags[argument] = values[value]
+
+        # Resolve bitmasks.
+        for argument, values in self.flags_bitmask[apiname].items():
+            if argument in flags:
+                continue
+
+            flags[argument] = []
+
+            if isinstance(argdict[argument], str):
+                value = int(argdict[argument], 16)
+            else:
+                value = argdict[argument]
+
+            for key, flag in values:
+                # TODO Have the monitor provide actual bitmasks as well.
+                if (value & key) == key:
+                    flags[argument].append(flag)
+
+            flags[argument] = "|".join(flags[argument])
+
+    def determine_unserializers(self, arginfo):
+        """Determines which unserializers (or converters) have to be used in
+        order to parse the various arguments for this function call. Keeps in
+        mind whether the current bson is 32-bit or 64-bit."""
+        argnames, converters = [], []
+
+        for argument in arginfo:
+            if isinstance(argument, (tuple, list)):
+                argument, argtype = argument
+            else:
+                argtype = None
+
+            if self.is_64bit:
+                converter = self.converters_64bit[argtype]
+            else:
+                converter = self.converters_32bit[argtype]
+
+            argnames.append(argument)
+            converters.append(converter)
+
+        return argnames, converters
 
     def __iter__(self):
         self.fd.seek(0)
@@ -95,14 +157,16 @@ class BsonParser(object):
             if not data:
                 return
 
-            if not len(data) == 4:
+            if len(data) != 4:
                 log.critical("BsonParser lacking data.")
                 return
 
             blen = struct.unpack("I", data)[0]
             if blen > MAX_MESSAGE_LENGTH:
-                log.critical("BSON message larger than MAX_MESSAGE_LENGTH, "
-                             "stopping handler.")
+                log.critical(
+                    "BSON message larger than MAX_MESSAGE_LENGTH, "
+                    "stopping handler."
+                )
                 return
 
             data += self.fd.read(blen-4)
@@ -113,8 +177,10 @@ class BsonParser(object):
             try:
                 dec = bson_decode(data)
             except Exception as e:
-                log.warning("BsonParser decoding problem {0} on "
-                            "data[:50] {1}".format(e, repr(data[:50])))
+                log.warning(
+                    "BsonParser decoding problem %s on data[:50] %s",
+                    e, repr(data[:50])
+                )
                 return
 
             mtype = dec.get("type", "none")
@@ -126,8 +192,42 @@ class BsonParser(object):
                 arginfo = dec.get("args", [])
                 category = dec.get("category")
 
-                argnames, converters = check_names_for_typeinfo(arginfo)
+                argnames, converters = self.determine_unserializers(arginfo)
                 self.infomap[index] = name, arginfo, argnames, converters, category
+
+                if dec.get("flags_value"):
+                    self.flags_value[name] = {}
+                    for arg, values in dec["flags_value"].items():
+                        self.flags_value[name][arg] = dict(values)
+
+                if dec.get("flags_bitmask"):
+                    self.flags_bitmask[name] = {}
+                    for arg, values in dec["flags_bitmask"].items():
+                        self.flags_bitmask[name][arg] = values
+                continue
+
+            # Handle dumped buffers.
+            if mtype == "buffer":
+                buf = dec.get("buffer")
+                sha1 = dec.get("checksum")
+                self.buffer_sha1 = hashlib.sha1(buf).hexdigest()
+
+                # Why do we pass along a sha1 checksum again?
+                if sha1 != self.buffer_sha1:
+                    log.warning("Incorrect sha1 passed along for a buffer.")
+
+                # If the parent is netlogs ResultHandler then we actually dump
+                # it - this should only be the case during the analysis, any
+                # after processing will then be ignored.
+                from lib.cuckoo.core.resultserver import ResultHandler
+
+                if isinstance(self.fd, ResultHandler):
+                    filepath = os.path.join(
+                        self.fd.storagepath, "buffer", self.buffer_sha1
+                    )
+                    with open(filepath, "wb") as f:
+                        f.write(buf)
+
                 continue
 
             tid = dec.get("T", 0)
@@ -140,9 +240,8 @@ class BsonParser(object):
             }
 
             if mtype == "debug":
-                log.info("Debug message from monitor: {0}".format(dec.get("msg", "")))
                 parsed["message"] = dec.get("msg", "")
-
+                log.info("Debug message from monitor: %s", parsed["message"])
             else:
                 # Regular api call from monitor
                 if index not in self.infomap:
@@ -154,13 +253,15 @@ class BsonParser(object):
                 args = dec.get("args", [])
 
                 if len(args) != len(argnames):
-                    log.warning("Inconsistent arg count (compared to arg names) "
-                                "on {2}: {0} names {1}".format(dec, argnames,
-                                                               apiname))
+                    log.warning(
+                        "Inconsistent arg count (compared to arg names) "
+                        "on %s: %s names %s", dec, argnames, apiname
+                    )
                     continue
 
-                argdict = dict((argnames[i], converters[i](args[i]))
-                               for i in range(len(args)))
+                argdict = {}
+                for idx, value in enumerate(args):
+                    argdict[argnames[idx]] = converters[idx](value)
 
                 # Special new process message from the monitor.
                 if apiname == "__process__":
@@ -188,7 +289,9 @@ class BsonParser(object):
                         modulepath = argdict["module_path"]
 
                     else:
-                        raise CuckooResultError("I don't recognise the bson log contents.")
+                        raise CuckooResultError(
+                            "I don't recognize the bson log contents."
+                        )
 
                     # FILETIME is 100-nanoseconds from 1601 :/
                     vmtimeunix = (timelow + (timehigh << 32))
@@ -197,7 +300,17 @@ class BsonParser(object):
                     parsed["first_seen"] = vmtime
 
                     procname = get_filename_from_path(modulepath)
+                    parsed["process_path"] = modulepath
                     parsed["process_name"] = procname
+                    parsed["command_line"] = argdict.get("command_line")
+
+                    # Is this a 64-bit process?
+                    if argdict.get("is_64bit"):
+                        self.is_64bit = True
+
+                    # Is this process being "tracked"?
+                    parsed["track"] = bool(argdict.get("track", 1))
+                    parsed["modules"] = argdict.get("modules", {})
 
                     self.pid = pid
 
@@ -219,6 +332,7 @@ class BsonParser(object):
                     parsed["status"] = argdict.pop("is_success", 1)
                     parsed["return_value"] = argdict.pop("retval", 0)
                     parsed["arguments"] = argdict
+                    parsed["flags"] = {}
 
                     parsed["stacktrace"] = dec.get("s", [])
                     parsed["uniqhash"] = dec.get("h", 0)
@@ -227,8 +341,11 @@ class BsonParser(object):
                         parsed["last_error"] = dec["e"]
                         parsed["nt_status"] = dec["E"]
 
-                    if apiname in self.flags:
-                        for flag in self.flags[apiname].keys():
-                            argdict[flag + "_s"] = self._flag_represent(apiname, flag, argdict[flag])
+                    if apiname in self.flags_value:
+                        self.resolve_flags(apiname, argdict, parsed["flags"])
+
+                    if self.buffer_sha1:
+                        parsed["buffer"] = self.buffer_sha1
+                        self.buffer_sha1 = None
 
             yield parsed

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -12,14 +12,14 @@ import time
 import settings
 
 from distributed.api import node_status, fetch_tasks, delete_task
-from distributed.api import store_report, submit_task
+from distributed.api import store_report, submit_task, fetch_pcap
 from distributed.app import create_app
 from distributed.db import db, Task, Node, NodeStatus
 from distributed.exception import InvalidReport
 
 def scheduler():
     while True:
-        for node in Node.query.filter_by(enabled=True).all():
+        for node in Node.query.filter_by(enabled=True, mode="normal").all():
             # Fetch the status of this node.
             status = node_status(node.url)
             if not status:
@@ -111,8 +111,12 @@ def handle_node(instance):
         # Fetching of reports.
         tasks = fetch_tasks(node.url, status="reported")
         for task in tasks[:settings.threshold]:
+            # In the case that a Cuckoo node has been reset over time it's
+            # possible that there are multiple combinations of
+            # node-id/task-id, in this case we take the last one available.
+            # (This makes it possible to re-setup a Cuckoo node).
             q = Task.query.filter_by(node_id=node.id, task_id=task["id"])
-            t = q.first()
+            t = q.order_by(Task.id.desc()).first()
 
             if t is None:
                 log.debug("Node %s task #%d has not been submitted "
@@ -132,8 +136,15 @@ def handle_node(instance):
                 try:
                     store_report(node.url, t.task_id, report_format, dirpath)
                 except InvalidReport as e:
-                    log.critical("Error fetching report: %s" % e)
+                    log.critical("Error fetching report: %s", e)
 
+            # Fetch the pcap file.
+            if settings.pcap:
+                pcap_path = os.path.join(dirpath, "dump.pcap")
+                fetch_pcap(node.url, t.task_id, pcap_path)
+
+            # Delete the task and all its associated files from the
+            # Cuckoo node.
             delete_task(node.url, t.task_id)
 
             t.status = Task.FINISHED

@@ -1,4 +1,5 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2010-2013 Claudio Guarnieri.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -10,7 +11,7 @@ class SystemMetrics(Signature):
     severity = 2
     categories = ["generic"]
     authors = ["Cuckoo Developers"]
-    minimum = "1.2"
+    minimum = "2.0"
 
     # Evented signatures can specify filters that reduce the amount of
     # API calls that are streamed in. One can filter Process name, API

@@ -1,4 +1,5 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2010-2013 Claudio Guarnieri.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -24,4 +25,4 @@ class Python(Package):
         arguments = self.options.get("arguments", "")
 
         args = [path] + shlex.split(arguments)
-        return self.execute(python, args=args)
+        return self.execute(python, args=args, trigger="file:%s" % path)

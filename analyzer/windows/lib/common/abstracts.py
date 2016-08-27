@@ -1,8 +1,11 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2010-2013 Claudio Guarnieri.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
+import glob
 import os
+
 from _winreg import CreateKey, SetValueEx, CloseKey, REG_DWORD, REG_SZ
 
 from lib.api.process import Process
@@ -13,9 +16,10 @@ class Package(object):
     PATHS = []
     REGKEYS = []
 
-    def __init__(self, options={}):
+    def __init__(self, options={}, analyzer=None):
         """@param options: options dict."""
         self.options = options
+        self.analyzer = analyzer
         self.pids = []
 
         # Fetch the current working directory, defaults to $TEMP.
@@ -30,7 +34,7 @@ class Package(object):
         """
         self.pids = pids
 
-    def start(self):
+    def start(self, target):
         """Run analysis package.
         @raise NotImplementedError: this method is abstract.
         """
@@ -40,7 +44,7 @@ class Package(object):
         """Check."""
         return True
 
-    def _enum_paths(self):
+    def enum_paths(self):
         """Enumerate available paths."""
         basepaths = {
             "System32": [
@@ -67,13 +71,26 @@ class Package(object):
                 yield os.path.join(basepath, *path[1:])
 
     def get_path(self, application):
-        """Search for an application in all available paths.
+        """Search for the application in all available paths.
         @param applicaiton: application executable name
         @return: executable path
         """
-        for path in self._enum_paths():
+        for path in self.enum_paths():
             if os.path.isfile(path):
                 return path
+
+        raise CuckooPackageError("Unable to find any %s executable." %
+                                 application)
+
+    def get_path_glob(self, application):
+        """Search for the application in all available paths with glob support.
+        @param applicaiton: application executable name
+        @return: executable path
+        """
+        for path in self.enum_paths():
+            for path in glob.iglob(path):
+                if os.path.isfile(path):
+                    return path
 
         raise CuckooPackageError("Unable to find any %s executable." %
                                  application)
@@ -110,24 +127,38 @@ class Package(object):
 
             CloseKey(key_handle)
 
-    def execute(self, path, args):
+    def execute(self, path, args, mode=None, maximize=False, env=None,
+                source=None, trigger=None):
         """Starts an executable for analysis.
         @param path: executable path
         @param args: executable arguments
+        @param mode: monitor mode - which functions to instrument
+        @param maximize: whether the GUI should start maximized
+        @param env: additional environment variables
+        @param source: parent process of our process
+        @param trigger: trigger to indicate analysis start
         @return: process pid
         """
         dll = self.options.get("dll")
         free = self.options.get("free")
-        source = self.options.get("from")
+
+        source = source or self.options.get("from")
+        mode = mode or self.options.get("mode")
+
+        if not trigger and self.options.get("trigger"):
+            if self.options["trigger"] == "exefile":
+                trigger = "file:%s" % path
 
         # Setup pre-defined registry keys.
         self.init_regkeys(self.REGKEYS)
 
         p = Process()
-        if not p.execute(path=path, args=args, dll=dll,
-                         free=free, curdir=self.curdir, source=source):
-            raise CuckooPackageError("Unable to execute the initial process, "
-                                     "analysis aborted.")
+        if not p.execute(path=path, args=args, dll=dll, free=free,
+                         curdir=self.curdir, source=source, mode=mode,
+                         maximize=maximize, env=env, trigger=trigger):
+            raise CuckooPackageError(
+                "Unable to execute the initial process, analysis aborted."
+            )
 
         return p.pid
 

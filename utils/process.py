@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2010-2013 Claudio Guarnieri.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -12,10 +13,7 @@ import signal
 import multiprocessing
 import traceback
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger()
-
-sys.path.append(os.path.join(os.path.abspath(os.path.dirname(__file__)), ".."))
+sys.path.insert(0, os.path.join(os.path.abspath(os.path.dirname(__file__)), ".."))
 
 from lib.cuckoo.common.config import Config
 from lib.cuckoo.common.constants import CUCKOO_ROOT
@@ -23,6 +21,8 @@ from lib.cuckoo.core.database import Database, TASK_REPORTED, TASK_COMPLETED
 from lib.cuckoo.core.database import Task, TASK_FAILED_PROCESSING
 from lib.cuckoo.core.plugins import RunProcessing, RunSignatures, RunReporting
 from lib.cuckoo.core.startup import init_modules, drop_privileges
+
+log = None
 
 # We keep a reporting queue with at most a few hundred entries.
 QUEUE_THRESHOLD = 128
@@ -138,7 +138,11 @@ def autoprocess(parallel=1):
                     copy_path = None
 
                 args = task.target, copy_path
-                kwargs = dict(report=True, auto=True, task=task.to_dict())
+                kwargs = {
+                    "report": True,
+                    "auto": True,
+                    "task": dict(task.to_dict()),
+                }
                 result = pool.apply_async(process_wrapper, args, kwargs)
                 pending_results[task.id] = result
     except KeyboardInterrupt:
@@ -150,6 +154,8 @@ def autoprocess(parallel=1):
         pool.join()
 
 def main():
+    global log
+
     parser = argparse.ArgumentParser()
     parser.add_argument("id", type=str, help="ID of the analysis to process (auto for continuous processing of unprocessed tasks).")
     parser.add_argument("-d", "--debug", help="Display debug messages", action="store_true", required=False)
@@ -164,7 +170,11 @@ def main():
         drop_privileges(args.user)
 
     if args.debug:
-        log.setLevel(logging.DEBUG)
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    log = logging.getLogger("cuckoo.process")
 
     if args.modules:
         sys.path.insert(0, args.modules)
@@ -176,7 +186,13 @@ def main():
     else:
         task = Database().view_task(int(args.id))
         if not task:
-            process(task={"id": int(args.id), "category": "file", "target": ""}, report=args.report)
+            task = {
+                "id": int(args.id),
+                "category": "file",
+                "target": "",
+                "options": "",
+            }
+            process(task=task, report=args.report)
         else:
             process(task=task.to_dict(), report=args.report)
 

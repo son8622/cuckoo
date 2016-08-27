@@ -1,4 +1,5 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2010-2013 Claudio Guarnieri.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -91,18 +92,16 @@ class ReportHTML(Report):
                 if subcat not in processed[cat]:
                     processed[cat][subcat] = []
 
-                if orig != "file_moved" and orig != "file_copied":
-                    if "summary" in proc and orig in proc["summary"]:
-                        for content in proc["summary"][orig]:
-                            if content not in processed[cat][subcat]:
-                                processed[cat][subcat].append(content)
-
                 # Special handling required for file moved/copied.
-                else:
-                    for row in proc.get("summary", {}).get(orig, []):
-                        if row not in processed[cat][subcat]:
-                            entry = "%s -> %s" % (row["src"], row["dst"])
-                            processed[cat][subcat].append(entry)
+                if orig == "file_moved" or orig == "file_copied":
+                    for src, dst in proc.get("summary", {}).get(orig, []):
+                        entry = "%s -> %s" % (src, dst)
+                        processed[cat][subcat].append(entry)
+                    continue
+
+                if "summary" in proc and orig in proc["summary"]:
+                    for content in proc["summary"][orig]:
+                        processed[cat][subcat].append(content)
 
         try:
             tpl = env.get_template("report.html")

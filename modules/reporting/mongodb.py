@@ -1,4 +1,5 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2010-2013 Claudio Guarnieri.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -29,7 +30,7 @@ class MongoDB(Report):
         @raise CuckooReportError: if unable to connect.
         """
         host = self.options.get("host", "127.0.0.1")
-        port = self.options.get("port", 27017)
+        port = int(self.options.get("port", 27017))
         db = self.options.get("db", "cuckoo")
 
         try:
@@ -74,11 +75,11 @@ class MongoDB(Report):
         @param results: analysis results dictionary.
         @raise CuckooReportError: if fails to connect or write to MongoDB.
         """
-        # We put the raise here and not at the import because it would
-        # otherwise trigger even if the module is not enabled in the config.
         if not HAVE_MONGO:
-            raise CuckooDependencyError("Unable to import pymongo "
-                                        "(install with `pip install pymongo`)")
+            raise CuckooDependencyError(
+                "Unable to import pymongo (install with "
+                "`pip install pymongo`)"
+            )
 
         self.connect()
 
@@ -108,8 +109,16 @@ class MongoDB(Report):
         if "network" not in report:
             report["network"] = {}
 
+        # This will likely hardcode the cuckoo.log to this point, but that
+        # should be fine.
+        if report.get("debug"):
+            report["debug"]["cuckoo"] = list(report["debug"]["cuckoo"])
+
+        # Store path of the analysis path.
+        report["info"]["analysis_path"] = self.analysis_path
+
         # Store the sample in GridFS.
-        if results["info"]["category"] == "file" and "target" in results:
+        if results.get("info", {}).get("category") == "file" and "target" in results:
             sample = File(self.file_path)
             if sample.valid():
                 fname = results["target"]["file"]["name"]
@@ -130,14 +139,28 @@ class MongoDB(Report):
             spcap_id = self.store_file(spcap)
             report["network"]["sorted_pcap_id"] = spcap_id
 
-        # Store the process memory dump file in GridFS and reference it back in the report.
+        mitmproxy_path = os.path.join(self.analysis_path, "dump.mitm")
+        mitmpr = File(mitmproxy_path)
+        if mitmpr.valid():
+            mitmpr_id = self.store_file(mitmpr)
+            report["network"]["mitmproxy_id"] = mitmpr_id
+
+        # Store the process memory dump file and extracted files in GridFS and
+        # reference it back in the report.
         if "procmemory" in report and self.options.get("store_memdump", False):
             for idx, procmem in enumerate(report["procmemory"]):
-                procmem_path = os.path.join(self.analysis_path, "memory", "{0}.dmp".format(procmem["pid"]))
+                procmem_path = os.path.join(
+                    self.analysis_path, "memory", "%s.dmp" % procmem["pid"]
+                )
                 procmem_file = File(procmem_path)
                 if procmem_file.valid():
                     procmem_id = self.store_file(procmem_file)
-                    report["procmemory"][idx].update({"procmem_id": procmem_id})
+                    procmem["procmem_id"] = procmem_id
+
+                for extracted in procmem.get("extracted", []):
+                    f = File(extracted["path"])
+                    if f.valid():
+                        extracted["extracted_id"] = self.store_file(f)
 
         # Walk through the dropped files, store them in GridFS and update the
         # report with the ObjectIds.
@@ -156,15 +179,13 @@ class MongoDB(Report):
 
         # Add screenshots.
         report["shots"] = []
-        shots_path = os.path.join(self.analysis_path, "shots")
-        if os.path.exists(shots_path):
+        if os.path.exists(self.shots_path):
             # Walk through the files and select the JPGs.
-            for shot_file in sorted(os.listdir(shots_path)):
+            for shot_file in sorted(os.listdir(self.shots_path)):
                 if not shot_file.endswith(".jpg"):
                     continue
 
-                shot_path = os.path.join(self.analysis_path,
-                                         "shots", shot_file)
+                shot_path = os.path.join(self.shots_path, shot_file)
                 shot = File(shot_path)
                 # If the screenshot path is a valid file, store it and
                 # reference it back in the report.
@@ -186,7 +207,7 @@ class MongoDB(Report):
                 chunk = []
                 chunks_ids = []
                 # Loop on each process call.
-                for index, call in enumerate(process["calls"]):
+                for call in process["calls"]:
                     # If the chunk size is paginate or if the loop is
                     # completed then store the chunk in MongoDB.
                     if len(chunk) == paginate:
@@ -212,6 +233,21 @@ class MongoDB(Report):
             # Store the results in the report.
             report["behavior"] = dict(report["behavior"])
             report["behavior"]["processes"] = new_processes
+
+        if report.get("procmon"):
+            procmon, chunk = [], []
+
+            for entry in report["procmon"]:
+                if len(chunk) == paginate:
+                    procmon.append(self.db.procmon.insert(chunk))
+                    chunk = []
+
+                chunk.append(entry)
+
+            if chunk:
+                procmon.append(self.db.procmon.insert(chunk))
+
+            report["procmon"] = procmon
 
         # Store the report and retrieve its object id.
         self.db.analysis.save(report)

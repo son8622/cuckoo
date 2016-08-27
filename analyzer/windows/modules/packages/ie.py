@@ -1,12 +1,16 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2010-2013 Claudio Guarnieri.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
+import logging
 import os
 
 from _winreg import HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER
 
 from lib.common.abstracts import Package
+
+log = logging.getLogger(__name__)
 
 class IE(Package):
     """Internet Explorer analysis package."""
@@ -119,4 +123,6 @@ class IE(Package):
             log.info("Submitted file is missing extension, adding .html")
 
         iexplore = self.get_path("Internet Explorer")
-        return self.execute(iexplore, args=[target])
+        return self.execute(
+            iexplore, args=[target], maximize=True, mode="iexplore"
+        )

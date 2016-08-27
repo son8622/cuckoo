@@ -1,4 +1,4 @@
-# Copyright (C) 2010-2015 Cuckoo Foundation.
+# Copyright (C) 2014-2016 Cuckoo Foundation.
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
@@ -51,7 +51,7 @@ class Config:
                     # Split the name and the value of the option.
                     try:
                         key, value = field.split("=", 1)
-                    except ValueError as e:
+                    except ValueError:
                         pass
                     else:
                         # If the parsing went good, we add the option to the
